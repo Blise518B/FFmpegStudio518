@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Build output
+build/
+dist/
+
+# Local/test data
+.testdata/
+data/
+
+# Editors
+.vscode/
+.idea/

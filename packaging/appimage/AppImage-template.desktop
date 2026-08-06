@@ -1,0 +1,10 @@
+[Desktop Entry]
+Path=/
+Exec=/APPIMAGENAME
+Icon=/APPIMAGENAME
+Name=APPIMAGENAME
+Type=Application
+Categories=AudioVideo;Video;
+X-AppImage-Arch=x86_64
+X-AppImage-Name=APPIMAGENAME
+X-AppImage-Version=APPIMAGEVERSION

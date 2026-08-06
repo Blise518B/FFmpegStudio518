@@ -1,0 +1,101 @@
+# Builds the shareable binaries for Windows and Linux.
+#
+#   * on a published release -> assets are attached to that release
+#   * manually (workflow_dispatch) -> artifacts only, for testing the build
+#
+# The Windows asset keeps a fixed name so the download button in the README
+# ("releases/latest/download/FFmpegStudio518-Windows.exe") never goes stale.
+name: Build
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false        # let one OS finish even if the other fails
+      matrix:
+        include:
+          - os: windows-latest
+            output-ext: "exe"
+          - os: ubuntu-latest
+            output-ext: "AppImage"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # Gate the release on the test suite. Windows only: Qt runs headless
+      # there without extra system packages, and the suite is OS-independent.
+      - name: Run tests
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m unittest discover -s tests -v
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm FFmpegStudio518.spec
+          $built = Get-ChildItem dist/FFmpegStudio518-*.exe | Select-Object -First 1
+          Move-Item $built.FullName dist/FFmpegStudio518-Windows.exe
+          Get-ChildItem dist
+
+      - name: Build (Linux AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y wget file desktop-file-utils \
+                                  libegl1 libxkbcommon0 libglib2.0-0
+          wget -q https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
+
+          APPNAME=FFmpegStudio518
+          VERSION=$(python -c "import re,pathlib;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', pathlib.Path('ffmpeg_studio/__init__.py').read_text(encoding='utf-8')).group(1))")
+
+          pyinstaller --noconfirm $APPNAME.spec
+          # the spec version-stamps the binary; AppRun expects the plain name
+          mv dist/$APPNAME-* dist/$APPNAME
+          cp packaging/appimage/AppRun dist/AppRun
+          chmod +x dist/AppRun dist/$APPNAME
+          cp ffmpeg_studio/assets/icon.png dist/$APPNAME.png
+          sed -e "s/APPIMAGENAME/$APPNAME/g" -e "s/APPIMAGEVERSION/$VERSION/g" \
+              packaging/appimage/AppImage-template.desktop > dist/$APPNAME.desktop
+
+          # GitHub runners have no FUSE, so appimagetool must self-extract
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          export ARCH=x86_64
+          ./appimagetool-x86_64.AppImage dist/ "dist/$APPNAME-$VERSION-x86_64.AppImage"
+          ls -la dist
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FFmpegStudio518-${{ runner.os }}
+          path: dist/FFmpegStudio518*.${{ matrix.output-ext }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/FFmpegStudio518*.${{ matrix.output-ext }}

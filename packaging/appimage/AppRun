@@ -1,0 +1,3 @@
+#!/bin/bash
+# Forward every argument through to the app.
+exec "$APPDIR/FFmpegStudio518" "$@"

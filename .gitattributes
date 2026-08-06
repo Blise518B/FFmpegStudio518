@@ -1,0 +1,6 @@
+# Normalise line endings so Windows checkouts don't churn the whole tree.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.png binary
+*.ico binary
