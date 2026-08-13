@@ -17,8 +17,13 @@ profile, press start. No command line, no install.
 ## What it does
 
 - **Convert & compress** — MP4 / MKV / WebM / MOV / AVI with H.264, H.265,
-  VP9 or AV1, plus NVIDIA NVENC when a GPU is detected. Pick quality (CRF),
-  a fixed bitrate, or a **2-pass target file size**
+  VP9 or AV1. Pick quality (CRF), a fixed bitrate, or a **2-pass target file
+  size**
+- **Uses your GPU by default** — "Auto" picks NVENC when the card supports
+  it and falls back to the CPU when it doesn't. On jobs where nothing needs
+  to touch actual pixels (timelapse), the decode stays on the card too, which
+  measured **1.86× faster** end to end. Target-size mode deliberately stays on
+  the CPU, since only it can do a real two-pass
 - **Share without re-encoding** — the `H.264 web-safe` codec stream-copies
   anything that already plays on Discord and in browsers, and only converts
   what doesn't (RGB 4:4:4, HEVC, 10-bit, AC-3 audio). Add a **Max size**
@@ -78,7 +83,7 @@ Windows SmartScreen will complain about the unsigned exe —
     start.bat        # sets up .venv and launches
 
 Python 3.10+. `build.bat` builds the exe. `python -m unittest discover -s
-tests` runs the suite (123 tests, including integration tests that drive real
+tests` runs the suite (139 tests, including integration tests that drive real
 ffmpeg encodes when it's installed).
 
 ## License

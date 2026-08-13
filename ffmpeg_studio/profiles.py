@@ -5,6 +5,7 @@ deleting one doesn't resurrect it on the next start).
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -106,7 +107,7 @@ def import_profile(source: Path) -> str | None:
 
 DEFAULT_PROFILES: dict[str, JobSpec] = {
     "MP4 1080p (share)": JobSpec(
-        container="mp4", video_codec="h264", crf=20, preset="medium",
+        container="mp4", video_codec="auto", crf=20, preset="medium",
         scale_mode="1080", audio_mode="encode", audio_bitrate=192),
     # Keeps the file exactly as-is when it already plays on Discord; only
     # re-encodes what has to be (RGB/HEVC/10-bit, or over the size limit).
@@ -122,11 +123,11 @@ DEFAULT_PROFILES: dict[str, JobSpec] = {
         max_mb=500.0, audio_mode="keep", audio_bitrate=192,
         suffix="_discord_hq"),
     "Discord clip (under 10 MB)": JobSpec(
-        container="mp4", video_codec="h264", rate_mode="size", target_mb=9.5,
+        container="mp4", video_codec="auto", rate_mode="size", target_mb=9.5,
         preset="medium", scale_mode="720", audio_mode="encode",
         audio_bitrate=96),
     "Compress small (H.265)": JobSpec(
-        container="mp4", video_codec="hevc", crf=26, preset="medium",
+        container="mp4", video_codec="hevc_nvenc", crf=26, preset="medium",
         audio_mode="encode", audio_bitrate=160, suffix="_small"),
     "WebM for web": JobSpec(
         container="webm", video_codec="vp9", crf=32, preset="medium",
@@ -154,16 +155,39 @@ DEFAULT_PROFILES: dict[str, JobSpec] = {
     "Extract audio untouched (M4A)": JobSpec(
         container="m4a", audio_mode="keep"),
     "Timelapse (30 seconds)": JobSpec(
-        container="mp4", video_codec="h264", crf=20, preset="medium",
+        container="mp4", video_codec="auto", crf=20, preset="medium",
         timelapse=True, timelapse_seconds=30.0, audio_mode="remove",
         suffix="_timelapse"),
     "High-quality GIF": JobSpec(
         container="gif", anim_fps=15, anim_width=480),
     "720p 30fps (small share)": JobSpec(
-        container="mp4", video_codec="h264", crf=23, preset="medium",
+        container="mp4", video_codec="auto", crf=23, preset="medium",
         scale_mode="720", fps_mode="custom", fps=30.0,
         audio_mode="encode", audio_bitrate=128, suffix="_720p"),
 }
+
+
+# Defaults whose encoder choice moved to the GPU-first "auto". A profile
+# already on disk keeps its old CPU codec forever otherwise, so an existing
+# install would never see the change — but only files that still match the
+# old shipped version are touched. Anything edited is the user's own.
+_CODEC_UPGRADES = {
+    "MP4 1080p (share)": "h264",
+    "Discord clip (under 10 MB)": "h264",
+    "Compress small (H.265)": "hevc",
+    "Timelapse (30 seconds)": "h264",
+    "720p 30fps (small share)": "h264",
+}
+
+
+def _apply_codec_upgrades() -> None:
+    for name, old_codec in _CODEC_UPGRADES.items():
+        current = DEFAULT_PROFILES.get(name)
+        on_disk = load_profile(name)
+        if current is None or on_disk is None:
+            continue
+        if on_disk == dataclasses.replace(current, video_codec=old_codec):
+            save_profile(name, current)
 
 
 def _apply_renames() -> None:
@@ -250,6 +274,7 @@ def ensure_defaults() -> None:
     update. (The old v1 marker meant "all ten originals were offered".)
     """
     _apply_renames()
+    _apply_codec_upgrades()
     state = config_dir() / _SEEDED
     try:
         seeded = set(json.loads(state.read_text(encoding="utf-8")))

@@ -329,6 +329,7 @@ class MainWindow(QMainWindow):
     def _on_gpu_found(self, encoders: set) -> None:
         self.gpu_encoders = set(encoders)
         self.actions.set_gpu_encoders(self.gpu_encoders)
+        self._schedule_preview()   # "Auto" resolves differently now
         if self.gpu_encoders:
             self.status_ffmpeg.setText(
                 f"{self.install.ffmpeg}   ·   GPU: "
@@ -508,6 +509,9 @@ class MainWindow(QMainWindow):
         open_done = menu.addAction("Open output folder when done")
         open_done.setCheckable(True)
         open_done.setChecked(s.open_when_done)
+        gpu_dec = menu.addAction("Decode on the GPU when possible")
+        gpu_dec.setCheckable(True)
+        gpu_dec.setChecked(s.gpu_decode)
         menu.addSeparator()
         set_path = menu.addAction("Set FFmpeg location…")
         download = menu.addAction("Download FFmpeg…")
@@ -528,6 +532,10 @@ class MainWindow(QMainWindow):
         elif chosen is open_done:
             s.open_when_done = open_done.isChecked()
             s.save()
+        elif chosen is gpu_dec:
+            s.gpu_decode = gpu_dec.isChecked()
+            s.save()
+            self._schedule_preview()
         elif chosen is set_path:
             exe, _f = QFileDialog.getOpenFileName(
                 self, "Locate ffmpeg.exe", "", "ffmpeg (ffmpeg*)")
@@ -558,7 +566,8 @@ class MainWindow(QMainWindow):
         try:
             plan = build_plan(spec, info, out_dir,
                               overwrite=self.settings.overwrite,
-                              gpu_encoders=self.gpu_encoders or None)
+                              gpu_encoders=self.gpu_encoders,
+                              gpu_decode=self.settings.gpu_decode)
         except BuildError as exc:
             self.preview.setPlainText(f"⚠ {exc}")
             self.warn_label.hide()
@@ -609,7 +618,8 @@ class MainWindow(QMainWindow):
                 target_dir = self._target_dir(out_dir, in_root, path)
                 plan = build_plan(spec, info, target_dir,
                                   overwrite=self.settings.overwrite,
-                                  gpu_encoders=self.gpu_encoders or None)
+                                  gpu_encoders=self.gpu_encoders,
+                                  gpu_decode=self.settings.gpu_decode)
             except BuildError as exc:
                 self.files.set_status(path, f"✖ {exc}")
                 skipped += 1

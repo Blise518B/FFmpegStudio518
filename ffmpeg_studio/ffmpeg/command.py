@@ -172,8 +172,59 @@ def is_web_safe(info: MediaInfo) -> bool:
 def _too_big(info: MediaInfo, max_mb: float) -> bool:
     return max_mb > 0 and info.size_bytes > max_mb * _MIB
 
-_AUTO_VIDEO = {"mp4": "h264", "mov": "h264", "mkv": "h264", "avi": "h264",
-               "webm": "vp9"}
+
+# --- keeping the whole job on the GPU -------------------------------------
+# Decoding is the bottleneck on a big timelapse: every frame of the source
+# has to come off disk even though almost all of them are then thrown away.
+# NVDEC can do that decode, and if nothing in the filter chain needs to touch
+# actual pixels the frames never have to come back to system memory at all.
+
+# what NVDEC reliably handles, 8-bit only
+_GPU_DECODABLE = {"h264", "hevc", "vp9", "av1", "mpeg2video"}
+# filters that only move timestamps or drop whole frames — no pixel access
+_GPU_SAFE_FILTERS = {"setpts", "fps"}
+
+
+def gpu_pipeline_ok(info: MediaInfo, codec: str, vf: list[str]) -> bool:
+    """True when decode → filter → encode can all stay on the card."""
+    if not codec.endswith("_nvenc"):
+        return False
+    if info.v_codec not in _GPU_DECODABLE:
+        return False
+    if info.pix_fmt and info.pix_fmt not in _WEB_SAFE_PIX:
+        return False        # 10-bit and 4:4:4 aren't worth the risk here
+    return all(f.split("=")[0] in _GPU_SAFE_FILTERS for f in vf)
+
+# What "Auto" picks, best first. The GPU is tried first because it is far
+# faster; the CPU entry is the fallback when there's no working NVENC.
+_AUTO_VIDEO = {"mp4": ["h264_nvenc", "h264"], "mov": ["h264_nvenc", "h264"],
+               "mkv": ["h264_nvenc", "h264"], "avi": ["h264_nvenc", "h264"],
+               "webm": ["vp9"]}          # no NVENC path into WebM
+
+
+def resolve_auto(ext: str, gpu_encoders: set[str] | None,
+                 rate_mode: str = "crf") -> tuple[str, str]:
+    """Best encoder for this container -> (codec, note or "").
+
+    Target-size mode deliberately stays on the CPU: hitting a size properly
+    needs two passes, which NVENC can't do, and a one-pass guess at a tight
+    budget is exactly where quality falls apart.
+    """
+    order = _AUTO_VIDEO.get(ext, ["h264_nvenc", "h264"])
+    cpu = order[-1]
+    if rate_mode == "size":
+        return cpu, "Target size uses the CPU encoder — it's the only one " \
+                    "that can do a proper two-pass"
+    # unknown means "not yet proven", so only ever pick a GPU encoder that
+    # has actually been tested on this machine
+    working = gpu_encoders or set()
+    for codec in order:
+        if not codec.endswith("_nvenc"):
+            return codec, ""
+        if codec in working:
+            return codec, "Using the GPU encoder — much faster; pick the " \
+                          "CPU one if you want the smallest file"
+    return cpu, ""
 
 # codecs a container can hold via "-c:v copy" without drama
 _COPY_OK = {"mp4": {"h264", "hevc", "av1", "mpeg4"},
@@ -249,7 +300,8 @@ def _audio_filters(spec: JobSpec, info: MediaInfo,
 
 def build_plan(spec: JobSpec, info: MediaInfo, out_dir: Path,
                overwrite: bool = False,
-               gpu_encoders: set[str] | None = None) -> JobPlan:
+               gpu_encoders: set[str] | None = None,
+               gpu_decode: bool = True) -> JobPlan:
     """Build the ffmpeg invocation(s) for one source file."""
     notes: list[str] = []
     ext, kind = effective_container(spec, info)
@@ -301,7 +353,7 @@ def build_plan(spec: JobSpec, info: MediaInfo, out_dir: Path,
         body = _anim(spec, info, ext, notes, speed)
     else:
         return _video(spec, info, ext, head, out, out_duration, notes,
-                      gpu_encoders, speed)
+                      gpu_encoders, speed, gpu_decode)
 
     body += _custom(spec, notes)
     return JobPlan(passes=[head + body + [str(out)]], output=out,
@@ -530,7 +582,8 @@ def _vf_chain_rotate_only(spec: JobSpec) -> list[str]:
 def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
            out: Path, duration: float | None, notes: list[str],
            gpu_encoders: set[str] | None,
-           speed: float | None = None) -> JobPlan:
+           speed: float | None = None,
+           gpu_decode: bool = True) -> JobPlan:
     # in timelapse mode the frame rate is set after the retime, not before
     vf = _vf_chain(spec, info, notes, include_fps=speed is None)
     if speed is not None:
@@ -547,13 +600,15 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
         codec = cpu
 
     if codec == "auto":
-        codec = _AUTO_VIDEO.get(ext, "h264")
+        codec, why = resolve_auto(ext, gpu_encoders, rate_mode)
+        if why:
+            notes.append(why)
 
     if codec == "h264rgb":
         if ext not in _RGB_CONTAINERS:
             notes.append(f".{ext} can't carry RGB H.264 — using MKV-safe "
                          "H.264 instead")
-            codec = _AUTO_VIDEO.get(ext, "h264")
+            codec = resolve_auto(ext, gpu_encoders, rate_mode)[0]
         else:
             notes.append("RGB 4:4:4 won't hardware-decode — great as a master,"
                          " re-encode before sharing")
@@ -567,12 +622,12 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
                       else info.pix_fmt or "this pixel format")
             notes.append(f"{reason} won't play on Discord — converting to "
                          "H.264 yuv420p")
-            codec = _AUTO_VIDEO.get(ext, "h264")
+            codec = resolve_auto(ext, gpu_encoders, rate_mode)[0]
         elif _too_big(info, spec.max_mb):
             notes.append(
                 f"Over the {spec.max_mb:g} MB limit "
                 f"({info.size_bytes / _MIB:.0f} MB) — re-encoding to fit")
-            codec = _AUTO_VIDEO.get(ext, "h264")
+            codec = resolve_auto(ext, gpu_encoders, rate_mode)[0]
         else:
             notes.append("Video already Discord-ready — copied untouched")
             codec = "copy"
@@ -581,7 +636,7 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
         copy_ok = _COPY_OK.get(ext, set())
         incompatible = copy_ok is not None and info.v_codec not in copy_ok
         if vf or rate_mode != "crf" or incompatible:
-            fallback = _AUTO_VIDEO.get(ext, "h264")
+            fallback = resolve_auto(ext, gpu_encoders, rate_mode)[0]
             why = ("filters/bitrate need a re-encode" if (vf or rate_mode != "crf")
                    else f"{info.v_codec or 'source codec'} doesn't fit .{ext}")
             notes.append(f"Copy not possible ({why}) — encoding with "
@@ -603,11 +658,19 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
         rate_mode = "crf"
 
     audio_args = _video_audio(spec, info, ext, notes, want_compat, speed)
+
+    # decode on the card too where that's safe — on a heavy timelapse the
+    # decode, not the encode, is what takes the time
+    on_gpu = gpu_decode and gpu_pipeline_ok(info, codec, vf)
+    if on_gpu:
+        head = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"] + head
+        notes.append("Decoding on the GPU as well — no frames leave the card")
+
     common = []
     if vf:
         common += ["-vf", ",".join(vf)]
     common += ["-c:v", _ENCODER[codec]]
-    common += _codec_tuning(codec, spec)
+    common += _codec_tuning(codec, spec, on_gpu)
 
     if rate_mode == "crf":
         common += _crf_args(codec, spec.crf)
@@ -647,7 +710,12 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
                    notes=notes, passlog=passlog)
 
 
-def _codec_tuning(codec: str, spec: JobSpec) -> list[str]:
+def _codec_tuning(codec: str, spec: JobSpec,
+                  on_gpu: bool = False) -> list[str]:
+    if codec.endswith("_nvenc") and on_gpu:
+        # frames are already CUDA-side; naming a pixel format would drag
+        # them back through system memory and undo the whole point
+        return ["-preset", _NVENC_PRESET[spec.preset]]
     if codec == "h264rgb":
         # no -pix_fmt: forcing yuv420p here would throw the chroma away again,
         # which is the whole reason for picking this encoder

@@ -18,6 +18,7 @@ class Settings:
     last_profile: str = ""
     overwrite: bool = False         # overwrite existing outputs instead of "(1)"
     open_when_done: bool = True     # open the output folder after a run
+    gpu_decode: bool = True         # decode on the GPU when the job allows it
     ffmpeg_path: str = ""           # user-set folder or ffmpeg.exe (empty = auto)
     window_geometry: str = ""       # hex-encoded QByteArray
     log_visible: bool = False

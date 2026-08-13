@@ -36,7 +36,7 @@ CONTAINER_LABELS = {
 CONTAINER_ORDER = ["same"] + VIDEO_CONTAINERS + ANIM_CONTAINERS + AUDIO_CONTAINERS + IMAGE_CONTAINERS
 
 VIDEO_CODEC_LABELS = {
-    "auto": "Auto (best for format)",
+    "auto": "Auto — GPU when available",
     "copy": "Copy (no re-encode)",
     "h264": "H.264 / x264 (CPU)",
     "h264_compat": "H.264 web-safe (copy if possible)",

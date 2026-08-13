@@ -474,6 +474,114 @@ class TestMonoDownmix(unittest.TestCase):
         self.assertNotIn("-af", args)
 
 
+class TestGpuPreference(unittest.TestCase):
+    """Auto reaches for the GPU first, and falls back on its own."""
+
+    NV = {"h264_nvenc", "hevc_nvenc", "av1_nvenc"}
+
+    def test_auto_picks_the_gpu_when_it_works(self):
+        plan = build_plan(JobSpec(container="mp4", video_codec="auto"),
+                          info(), OUT, gpu_encoders=self.NV)
+        self.assertIn("h264_nvenc", flat(plan))
+
+    def test_auto_falls_back_to_cpu_without_a_gpu(self):
+        plan = build_plan(JobSpec(container="mp4", video_codec="auto"),
+                          info(), OUT, gpu_encoders=set())
+        self.assertIn("libx264", flat(plan))
+
+    def test_unknown_gpu_support_never_guesses_nvenc(self):
+        """None means 'not tested yet' — emitting NVENC there would hand
+        ffmpeg an encoder that may not exist on the machine."""
+        plan = build_plan(JobSpec(container="mp4", video_codec="auto"),
+                          info(), OUT, gpu_encoders=None)
+        self.assertIn("libx264", flat(plan))
+
+    def test_target_size_stays_on_the_cpu_for_two_pass(self):
+        plan = build_plan(JobSpec(container="mp4", video_codec="auto",
+                                  rate_mode="size", target_mb=10.0),
+                          info(), OUT, gpu_encoders=self.NV)
+        self.assertIn("libx264", flat(plan))
+        self.assertEqual(len(plan.passes), 2)      # the reason we stay on CPU
+        self.assertTrue(any("two-pass" in n for n in plan.notes))
+
+    def test_explicit_cpu_choice_is_honoured(self):
+        plan = build_plan(JobSpec(container="mp4", video_codec="h264"),
+                          info(), OUT, gpu_encoders=self.NV)
+        self.assertIn("libx264", flat(plan))
+
+    def test_webm_has_no_gpu_path(self):
+        plan = build_plan(JobSpec(container="webm", video_codec="auto"),
+                          info(), OUT, gpu_encoders=self.NV)
+        self.assertIn("libvpx-vp9", flat(plan))
+
+    def test_copy_fallback_also_uses_the_gpu(self):
+        plan = build_plan(JobSpec(container="mp4", video_codec="copy",
+                                  scale_mode="720"), info(), OUT,
+                          gpu_encoders=self.NV)
+        self.assertIn("h264_nvenc", flat(plan))
+
+
+class TestGpuDecodePipeline(unittest.TestCase):
+    """Decode on the card too, but only where nothing needs real pixels."""
+
+    NV = {"h264_nvenc"}
+
+    def _plan(self, spec, **kw):
+        return build_plan(spec, info(**kw.pop("info_kw", {})), OUT,
+                          gpu_encoders=self.NV, **kw)
+
+    def test_timelapse_stays_entirely_on_the_gpu(self):
+        plan = self._plan(JobSpec(container="mp4", video_codec="auto",
+                                  timelapse=True, timelapse_seconds=5.0,
+                                  audio_mode="remove"),
+                          info_kw={"duration": 600.0})
+        args = flat(plan)
+        self.assertIn("-hwaccel", args)
+        self.assertEqual(args[args.index("-hwaccel_output_format") + 1],
+                         "cuda")
+        self.assertLess(args.index("-hwaccel"), args.index("-i"))
+        # naming a pixel format would drag the frames back to system memory
+        self.assertNotIn("-pix_fmt", args)
+
+    def test_a_pixel_filter_forces_the_normal_path(self):
+        plan = self._plan(JobSpec(container="mp4", video_codec="auto",
+                                  scale_mode="720"))
+        args = flat(plan)
+        self.assertNotIn("-hwaccel", args)
+        self.assertIn("-pix_fmt", args)
+
+    def test_cpu_encoder_never_gets_the_gpu_pipeline(self):
+        plan = self._plan(JobSpec(container="mp4", video_codec="h264",
+                                  timelapse=True, timelapse_seconds=5.0,
+                                  audio_mode="remove"),
+                          info_kw={"duration": 600.0})
+        self.assertNotIn("-hwaccel", flat(plan))
+
+    def test_source_the_card_cannot_decode_is_skipped(self):
+        plan = self._plan(JobSpec(container="mp4", video_codec="auto",
+                                  timelapse=True, timelapse_seconds=5.0,
+                                  audio_mode="remove"),
+                          info_kw={"duration": 600.0, "v_codec": "prores"})
+        self.assertNotIn("-hwaccel", flat(plan))
+
+    def test_ten_bit_source_is_skipped(self):
+        plan = self._plan(JobSpec(container="mp4", video_codec="auto",
+                                  timelapse=True, timelapse_seconds=5.0,
+                                  audio_mode="remove"),
+                          info_kw={"duration": 600.0,
+                                   "pix_fmt": "yuv420p10le"})
+        self.assertNotIn("-hwaccel", flat(plan))
+
+    def test_the_setting_can_turn_it_off(self):
+        plan = self._plan(JobSpec(container="mp4", video_codec="auto",
+                                  timelapse=True, timelapse_seconds=5.0,
+                                  audio_mode="remove"),
+                          info_kw={"duration": 600.0}, gpu_decode=False)
+        args = flat(plan)
+        self.assertNotIn("-hwaccel", args)
+        self.assertIn("h264_nvenc", args)      # still encodes on the GPU
+
+
 class TestTimelapse(unittest.TestCase):
     """Pick an output length; the speed-up is derived per file."""
 

@@ -155,6 +155,34 @@ class TestProfileFiles(unittest.TestCase):
         self.assertIn(new, names)               # new default alongside
         self.assertEqual(prof.load_profile(old).crf, 5)
 
+    def test_codec_upgrade_reaches_an_existing_install(self):
+        """Changing a shipped default only helps fresh installs unless the
+        file already on disk is carried forward too."""
+        import dataclasses
+        from ffmpeg_studio import profiles as prof
+        name = "Timelapse (30 seconds)"
+        current = prof.DEFAULT_PROFILES[name]
+        prof.save_profile(name, dataclasses.replace(current,
+                                                    video_codec="h264"))
+        prof.ensure_defaults()
+        self.assertEqual(prof.load_profile(name).video_codec, "auto")
+
+    def test_codec_upgrade_leaves_an_edited_profile_alone(self):
+        import dataclasses
+        from ffmpeg_studio import profiles as prof
+        name = "Timelapse (30 seconds)"
+        mine = dataclasses.replace(prof.DEFAULT_PROFILES[name],
+                                   video_codec="h264", crf=31)
+        prof.save_profile(name, mine)
+        prof.ensure_defaults()
+        kept = prof.load_profile(name)
+        self.assertEqual(kept.video_codec, "h264")   # untouched
+        self.assertEqual(kept.crf, 31)
+
+    def test_upgrade_map_only_names_real_profiles(self):
+        from ffmpeg_studio import profiles as prof
+        self.assertTrue(set(prof._CODEC_UPGRADES) <= set(prof.DEFAULT_PROFILES))
+
     def test_every_shipped_profile_has_a_tooltip(self):
         from ffmpeg_studio import profiles as prof
         for name, spec in prof.DEFAULT_PROFILES.items():
