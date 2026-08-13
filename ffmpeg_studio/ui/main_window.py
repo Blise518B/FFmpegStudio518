@@ -268,7 +268,11 @@ class MainWindow(QMainWindow):
         names = prof.list_profiles()
         self.profile_combo.blockSignals(True)
         self.profile_combo.clear()
-        self.profile_combo.addItems(names)
+        for row, name in enumerate(names):
+            self.profile_combo.addItem(name)
+            # hovering an entry in the drop-down explains what it's for
+            self.profile_combo.setItemData(row, prof.describe(name),
+                                           Qt.ItemDataRole.ToolTipRole)
         idx = self.profile_combo.findText(select) if select else -1
         self.profile_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.profile_combo.blockSignals(False)
@@ -392,6 +396,8 @@ class MainWindow(QMainWindow):
         spec = prof.load_profile(name)
         if spec is None:
             return
+        # and hovering the closed combo explains the one that's loaded
+        self.profile_combo.setToolTip(prof.describe(name, spec))
         self.actions.set_spec(spec)
         self._loaded_spec = spec.to_dict()
         self._set_dirty(False)

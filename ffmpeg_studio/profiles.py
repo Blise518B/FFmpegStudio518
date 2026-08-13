@@ -17,6 +17,14 @@ _SEEDED = "seeded_defaults.json"
 
 # The ten defaults the v1 marker stood for, so a v1 user who deleted one
 # doesn't get it back when a newer default is added.
+# Defaults that shipped under an older name. On upgrade the old file is
+# renamed so the profile keeps its place instead of appearing twice — but
+# only if it still matches the shipped default. An edited one is left alone,
+# because that is the user's own work under a name they chose to keep.
+_RENAMED = {
+    "RGB 4-4-4 master (original)": "RGB 4-4-4 master (normal quality)",
+}
+
 _V1_NAMES = frozenset({
     "MP4 1080p (share)", "Discord clip (under 10 MB)",
     "Compress small (H.265)", "WebM for web", "Remux to MKV (no re-encode)",
@@ -128,9 +136,9 @@ DEFAULT_PROFILES: dict[str, JobSpec] = {
     "Remove audio": JobSpec(
         container="same", video_codec="copy", audio_mode="remove",
         suffix="_mute"),
-    # Straight port of a shared .bat: libx264rgb at x264's own defaults into
-    # MP4, audio copied. CRF 23 is lossy, so this is a second generation.
-    "RGB 4-4-4 master (original)": JobSpec(
+    # libx264rgb at x264's own defaults into MP4, audio copied. CRF 23 is
+    # lossy, so this is a second generation.
+    "RGB 4-4-4 master (normal quality)": JobSpec(
         container="mp4", video_codec="h264rgb", crf=23, preset="medium",
         audio_mode="keep"),
     # Same encoder, quality raised to match the point of 4:4:4 (roughly
@@ -154,6 +162,78 @@ DEFAULT_PROFILES: dict[str, JobSpec] = {
 }
 
 
+def _apply_renames() -> None:
+    """Carry untouched defaults over to their new names."""
+    for old, new in _RENAMED.items():
+        old_path, new_path = _path(old), _path(new)
+        if not old_path.is_file() or new_path.exists():
+            continue
+        if load_profile(old) == DEFAULT_PROFILES.get(new):
+            try:
+                old_path.rename(new_path)
+            except OSError:
+                pass
+
+
+# Why you would reach for each shipped profile. Shown above the generated
+# settings line when you hover it in the picker.
+PROFILE_NOTES = {
+    "MP4 1080p (share)":
+        "Everyday conversion to an MP4 that plays anywhere, scaled down to "
+        "1080p if the source is bigger.",
+    "Discord-ready (keep quality)":
+        "Leaves the file exactly as it is if it already plays on Discord, "
+        "and only converts the ones that don't. Stays under 500 MB (Nitro).",
+    "Discord-ready (max quality)":
+        "Same as above, but a slower encoder setting fits more detail into "
+        "the same 500 MB. Only matters when it has to re-encode.",
+    "Discord clip (under 10 MB)":
+        "Squeezes a clip under Discord's free 10 MB limit — 720p, two-pass. "
+        "Use this one when you don't have Nitro.",
+    "Compress small (H.265)":
+        "Much smaller files at the same quality. Needs a reasonably modern "
+        "player — older devices and some browsers can't decode H.265.",
+    "WebM for web":
+        "VP9 in WebM, for putting video on a website.",
+    "Remux to MKV (no re-encode)":
+        "Swaps the container only. Video and audio are copied untouched, so "
+        "it's near-instant and loses nothing.",
+    "Remove audio":
+        "Strips the sound out and leaves the picture completely untouched.",
+    "RGB 4-4-4 master (normal quality)":
+        "Keeps colour at full resolution instead of quartering it — for "
+        "footage you'll edit or re-encode again. Won't play on Discord, "
+        "phones or most browsers.",
+    "RGB 4-4-4 master (high quality)":
+        "The same mastering format at a much finer quality setting, roughly "
+        "double the size. Set CRF to 0 for mathematically lossless.",
+    "Stereo to mono (VRC POV fix)":
+        "Mixes left and right together equally, so audio that swings between "
+        "your ears sits in the middle. The video is copied untouched, so "
+        "it's quick.",
+    "Extract MP3 (320k)":
+        "Pulls the sound out as a high-bitrate MP3.",
+    "Extract audio untouched (M4A)":
+        "Lifts the audio out without re-encoding it where possible — no "
+        "quality lost.",
+    "High-quality GIF":
+        "Builds a colour palette per clip, so the GIF looks far better than "
+        "a naive conversion.",
+    "720p 30fps (small share)":
+        "A smaller 720p copy at 30 fps for quick sharing.",
+}
+
+
+def describe(name: str, spec: JobSpec | None = None) -> str:
+    """Tooltip text for a profile: what it's for, then what it does."""
+    if spec is None:
+        spec = load_profile(name)
+    if spec is None:
+        return name
+    note = PROFILE_NOTES.get(name)
+    return f"{note}\n\n{spec.describe()}" if note else spec.describe()
+
+
 def ensure_defaults() -> None:
     """Write any ship-with profile the user has never been offered.
 
@@ -161,6 +241,7 @@ def ensure_defaults() -> None:
     you delete stays deleted, while genuinely new ones still turn up after an
     update. (The old v1 marker meant "all ten originals were offered".)
     """
+    _apply_renames()
     state = config_dir() / _SEEDED
     try:
         seeded = set(json.loads(state.read_text(encoding="utf-8")))

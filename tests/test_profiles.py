@@ -52,11 +52,11 @@ class TestDefaultNames(unittest.TestCase):
         from ffmpeg_studio import profiles as prof
         self.assertTrue(prof._V1_NAMES <= set(prof.DEFAULT_PROFILES))
 
-    def test_rgb_original_still_matches_x264_defaults(self):
-        """'original' reproduces a shared .bat that relies on x264's own
-        defaults. If these drift it quietly stops being 'the original'."""
+    def test_rgb_normal_still_matches_x264_defaults(self):
+        """This one reproduces a shared .bat that relies on x264's own
+        defaults, so those values must not drift."""
         from ffmpeg_studio import profiles as prof
-        spec = prof.DEFAULT_PROFILES["RGB 4-4-4 master (original)"]
+        spec = prof.DEFAULT_PROFILES["RGB 4-4-4 master (normal quality)"]
         self.assertEqual(spec.video_codec, "h264rgb")
         self.assertEqual(spec.crf, 23)            # x264's default CRF
         self.assertEqual(spec.preset, "medium")   # x264's default preset
@@ -89,11 +89,11 @@ class TestDefaultNames(unittest.TestCase):
 
     def test_rgb_high_quality_differs_only_in_quality_and_container(self):
         from ffmpeg_studio import profiles as prof
-        original = prof.DEFAULT_PROFILES["RGB 4-4-4 master (original)"]
+        normal = prof.DEFAULT_PROFILES["RGB 4-4-4 master (normal quality)"]
         hq = prof.DEFAULT_PROFILES["RGB 4-4-4 master (high quality)"]
-        self.assertEqual(hq.video_codec, original.video_codec)
-        self.assertEqual(hq.audio_mode, original.audio_mode)
-        self.assertLess(hq.crf, original.crf)
+        self.assertEqual(hq.video_codec, normal.video_codec)
+        self.assertEqual(hq.audio_mode, normal.audio_mode)
+        self.assertLess(hq.crf, normal.crf)
         self.assertEqual(hq.container, "mkv")
 
 
@@ -129,6 +129,49 @@ class TestProfileFiles(unittest.TestCase):
         prof.delete_profile(first[0])
         prof.ensure_defaults()                        # must NOT resurrect
         self.assertEqual(len(prof.list_profiles()), len(first) - 1)
+
+    def test_rename_carries_an_untouched_default_over(self):
+        """Renaming a shipped default must move the old file, not leave the
+        user staring at two near-identical profiles."""
+        from ffmpeg_studio import profiles as prof
+        old, new = ("RGB 4-4-4 master (original)",
+                    "RGB 4-4-4 master (normal quality)")
+        prof.save_profile(old, prof.DEFAULT_PROFILES[new])
+        prof.ensure_defaults()
+        names = prof.list_profiles()
+        self.assertIn(new, names)
+        self.assertNotIn(old, names)
+
+    def test_rename_leaves_an_edited_profile_alone(self):
+        """If they changed it, it's their profile now — don't touch it."""
+        from ffmpeg_studio import profiles as prof
+        old, new = ("RGB 4-4-4 master (original)",
+                    "RGB 4-4-4 master (normal quality)")
+        mine = JobSpec(container="mp4", video_codec="h264rgb", crf=5)
+        prof.save_profile(old, mine)
+        prof.ensure_defaults()
+        names = prof.list_profiles()
+        self.assertIn(old, names)               # still theirs
+        self.assertIn(new, names)               # new default alongside
+        self.assertEqual(prof.load_profile(old).crf, 5)
+
+    def test_every_shipped_profile_has_a_tooltip(self):
+        from ffmpeg_studio import profiles as prof
+        for name, spec in prof.DEFAULT_PROFILES.items():
+            self.assertIn(name, prof.PROFILE_NOTES,
+                          f"no hover note for {name!r}")
+            tip = prof.describe(name, spec)
+            self.assertIn(prof.PROFILE_NOTES[name], tip)
+            self.assertIn(spec.describe(), tip)
+
+    def test_custom_profile_still_gets_a_description(self):
+        from ffmpeg_studio import profiles as prof
+        spec = JobSpec(container="webm", video_codec="vp9", crf=31,
+                       scale_mode="720", audio_mode="remove")
+        prof.save_profile("my own thing", spec)
+        tip = prof.describe("my own thing")
+        for expected in ("WEBM", "VP9", "CRF 31", "720p", "audio removed"):
+            self.assertIn(expected, tip)
 
     def test_export_import(self):
         from ffmpeg_studio import profiles as prof

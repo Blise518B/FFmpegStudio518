@@ -32,7 +32,8 @@ profile, press start. No command line, no install.
   recordings where the music swings between your ears)
 - **Trim & clips** — cut a time range, palette-based GIFs, WebP, thumbnails
 - **Profiles** — save a whole setup under a name and reload it in one click;
-  rename, export and import them as JSON to share. Fifteen ship with the app
+  rename, export and import them as JSON to share. Fifteen ship with the app,
+  and hovering any of them explains what it's for and what it will do
 - **Subfolders** — process a whole tree at once, mirrored into the output
   folder, with the output folder itself always skipped
 - **Command preview** — the exact ffmpeg command is always on screen, along
@@ -70,7 +71,7 @@ Windows SmartScreen will complain about the unsigned exe —
     start.bat        # sets up .venv and launches
 
 Python 3.10+. `build.bat` builds the exe. `python -m unittest discover -s
-tests` runs the suite (98 tests, including integration tests that drive real
+tests` runs the suite (102 tests, including integration tests that drive real
 ffmpeg encodes when it's installed).
 
 ## License

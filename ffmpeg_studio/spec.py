@@ -123,6 +123,66 @@ class JobSpec:
             return "same"
         return "video"
 
+    def describe(self) -> str:
+        """One readable line of what this profile actually does.
+
+        Derived from the settings themselves, so a profile the user built
+        gets a useful description too.
+        """
+        bits: list[str] = []
+        kind = self.kind()
+        bits.append("Same format" if self.container == "same"
+                    else self.container.upper())
+
+        if kind in ("video", "same"):
+            if self.video_codec == "copy":
+                bits.append("video copied, no re-encode")
+            else:
+                codec = {"auto": "auto codec", "h264": "H.264",
+                         "h264_compat": "H.264, copied when possible",
+                         "h264rgb": "H.264 RGB 4:4:4", "hevc": "H.265",
+                         "vp9": "VP9", "av1": "AV1",
+                         "h264_nvenc": "H.264 (GPU)",
+                         "hevc_nvenc": "H.265 (GPU)",
+                         "av1_nvenc": "AV1 (GPU)"}.get(
+                             self.video_codec, self.video_codec)
+                bits.append(codec)
+                if self.rate_mode == "crf":
+                    bits.append(f"quality CRF {self.crf}")
+                elif self.rate_mode == "bitrate":
+                    bits.append(f"{self.video_bitrate} kbps")
+                else:
+                    bits.append(f"aimed at {self.target_mb:g} MB")
+                if self.max_mb > 0:
+                    bits.append(f"max {self.max_mb:g} MB")
+        elif kind == "anim":
+            bits.append(f"{self.anim_fps} fps")
+            if self.anim_width:
+                bits.append(f"{self.anim_width}px wide")
+
+        if self.scale_mode != "keep":
+            bits.append({"percent": f"{self.scale_percent}% size",
+                         "custom": f"{self.scale_w}x{self.scale_h}"}.get(
+                             self.scale_mode, f"{self.scale_mode}p"))
+        if self.fps_mode == "custom":
+            bits.append(f"{self.fps:g} fps")
+        if self.rotate:
+            bits.append(f"rotated {self.rotate}°")
+
+        if kind != "anim":
+            audio = {"keep": "audio kept", "encode":
+                     f"audio {self.audio_bitrate} kbps",
+                     "remove": "audio removed"}.get(self.audio_mode, "")
+            if audio:
+                bits.append(audio)
+        if self.mono:
+            bits.append("mono downmix")
+        if self.normalize:
+            bits.append("loudness normalised")
+        if self.trim:
+            bits.append("trimmed")
+        return " · ".join(b for b in bits if b)
+
     def to_dict(self) -> dict:
         return dataclasses.asdict(self)
 
