@@ -190,10 +190,14 @@ def needs_mono(spec: JobSpec, info: MediaInfo) -> bool:
     return spec.mono and info.a_channels != 1
 
 
-def _audio_filters(spec: JobSpec, info: MediaInfo) -> list[str]:
-    """-af chain (and -ac where a filter can't express it) for mono/loudnorm."""
+def _audio_filters(spec: JobSpec, info: MediaInfo,
+                   speed: float | None = None) -> list[str]:
+    """-af chain (and -ac where a filter can't express it) for mono/loudnorm,
+    plus the tempo change when the video is being retimed."""
     chain: list[str] = []
     args: list[str] = []
+    if speed is not None:
+        chain += _atempo_chain(speed)
     if needs_mono(spec, info):
         if info.a_channels == 2:
             chain.append(_MONO_PAN)
@@ -227,6 +231,27 @@ def build_plan(spec: JobSpec, info: MediaInfo, out_dir: Path,
     trim_start, trim_dur, duration = _trim(spec, info, notes)
     out = resolve_output(info.path, out_dir, ext, spec.suffix, overwrite)
 
+    # `duration` stays the length being read, which the filters need;
+    # `out_duration` is what the result will be, which progress needs.
+    speed = None
+    out_duration = duration
+    if spec.timelapse:
+        if kind in ("audio", "image"):
+            notes.append(f"Timelapse doesn't apply to .{ext} — ignored")
+        elif not duration:
+            notes.append("Unknown length — can't work out the timelapse speed")
+        else:
+            speed = timelapse_speed(spec, duration)
+            if speed and speed < 1:
+                notes.append(f"Target is longer than the clip — playing it "
+                             f"{1 / speed:.3g}x slower instead")
+            elif speed:
+                notes.append(f"Timelapse {speed:.4g}x — "
+                             f"{format_seconds(duration)} → "
+                             f"{format_seconds(spec.timelapse_seconds)}")
+            if speed:
+                out_duration = spec.timelapse_seconds
+
     head: list[str] = ["-hide_banner", "-y"]
     if trim_start is not None:
         head += ["-ss", _fnum(trim_start)]
@@ -239,14 +264,14 @@ def build_plan(spec: JobSpec, info: MediaInfo, out_dir: Path,
     elif kind == "image":
         body = _image(spec, info, ext, notes)
     elif kind == "anim":
-        body = _anim(spec, info, ext, notes)
+        body = _anim(spec, info, ext, notes, speed)
     else:
-        return _video(spec, info, ext, head, out, duration, notes,
-                      gpu_encoders)
+        return _video(spec, info, ext, head, out, out_duration, notes,
+                      gpu_encoders, speed)
 
     body += _custom(spec, notes)
     return JobPlan(passes=[head + body + [str(out)]], output=out,
-                   duration=duration, notes=notes)
+                   duration=out_duration, notes=notes)
 
 
 def _trim(spec: JobSpec, info: MediaInfo, notes: list[str]):
@@ -276,6 +301,46 @@ def _trim(spec: JobSpec, info: MediaInfo, notes: list[str]):
     return (start if start > 0 else None,
             (end - start) if end is not None else None,
             dur if dur is not None else total)
+
+
+# beyond this a sped-up soundtrack is unlistenable, so it gets dropped
+_MAX_AUDIO_SPEED = 4.0
+
+
+def timelapse_speed(spec: JobSpec, duration: float | None) -> float | None:
+    """How much faster the clip has to run to land on the target length.
+
+    ``duration`` is the length actually being encoded, so a trim is already
+    taken into account. Returns None when it can't be worked out.
+    """
+    if not spec.timelapse or not duration or spec.timelapse_seconds <= 0:
+        return None
+    speed = duration / spec.timelapse_seconds
+    return speed if speed > 0 else None
+
+
+def _timelapse_fps(spec: JobSpec, info: MediaInfo) -> float:
+    """Frame rate for the sped-up result."""
+    if spec.fps_mode == "custom" and spec.fps > 0:
+        return spec.fps
+    if info.fps and info.fps > 0:
+        return min(info.fps, 60.0)
+    return 30.0
+
+
+def _atempo_chain(speed: float) -> list[str]:
+    """atempo stages for ``speed``; it only handles 0.5–2x per stage."""
+    stages: list[str] = []
+    remaining = speed
+    while remaining > 2.0:
+        stages.append(f"atempo={_fnum(2.0)}")
+        remaining /= 2.0
+    while remaining < 0.5:
+        stages.append(f"atempo={_fnum(0.5)}")
+        remaining /= 0.5
+    if abs(remaining - 1.0) > 1e-6:
+        stages.append(f"atempo={_fnum(round(remaining, 6))}")
+    return stages
 
 
 def _vf_chain(spec: JobSpec, info: MediaInfo, notes: list[str],
@@ -386,8 +451,10 @@ def _image(spec: JobSpec, info: MediaInfo, ext: str,
 # --- gif / webp ------------------------------------------------------------
 
 def _anim(spec: JobSpec, info: MediaInfo, ext: str,
-          notes: list[str]) -> list[str]:
+          notes: list[str], speed: float | None = None) -> list[str]:
     pre = []
+    if speed is not None:
+        pre.append(f"setpts=PTS/{_fnum(speed)}")   # retime before resampling
     if spec.anim_fps > 0:
         pre.append(f"fps={spec.anim_fps}")
     if spec.anim_width > 0:
@@ -428,8 +495,13 @@ def _vf_chain_rotate_only(spec: JobSpec) -> list[str]:
 
 def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
            out: Path, duration: float | None, notes: list[str],
-           gpu_encoders: set[str] | None) -> JobPlan:
-    vf = _vf_chain(spec, info, notes)
+           gpu_encoders: set[str] | None,
+           speed: float | None = None) -> JobPlan:
+    # in timelapse mode the frame rate is set after the retime, not before
+    vf = _vf_chain(spec, info, notes, include_fps=speed is None)
+    if speed is not None:
+        vf.append(f"setpts=PTS/{_fnum(speed)}")
+        vf.append(f"fps={_fnum(_timelapse_fps(spec, info))}")
     codec = spec.video_codec
     rate_mode = spec.rate_mode
 
@@ -483,7 +555,7 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
             codec = fallback
         else:
             body = ["-c:v", "copy"] + _video_audio(spec, info, ext, notes,
-                                                   want_compat)
+                                                   want_compat, speed)
             body += _subs(info, ext, notes)
             body += _mux_extras(ext)
             body += _custom(spec, notes)
@@ -496,7 +568,7 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
                      "using quality mode instead")
         rate_mode = "crf"
 
-    audio_args = _video_audio(spec, info, ext, notes, want_compat)
+    audio_args = _video_audio(spec, info, ext, notes, want_compat, speed)
     common = []
     if vf:
         common += ["-vf", ",".join(vf)]
@@ -620,10 +692,16 @@ def _size_to_kbps(spec: JobSpec, info: MediaInfo, duration: float,
 
 
 def _video_audio(spec: JobSpec, info: MediaInfo, ext: str,
-                 notes: list[str], web_safe: bool = False) -> list[str]:
+                 notes: list[str], web_safe: bool = False,
+                 speed: float | None = None) -> list[str]:
     if not info.has_audio:
         return ["-an"] if spec.audio_mode == "remove" else []
     if spec.audio_mode == "remove":
+        return ["-an"]
+
+    if speed is not None and not (
+            1 / _MAX_AUDIO_SPEED <= speed <= _MAX_AUDIO_SPEED):
+        notes.append(f"Audio dropped — nothing survives {speed:.3g}x")
         return ["-an"]
 
     copy_ok = _ACOPY_OK.get(ext)
@@ -631,14 +709,14 @@ def _video_audio(spec: JobSpec, info: MediaInfo, ext: str,
         # AC-3 and friends are legal in MP4 but silent in a browser
         copy_ok = _WEB_SAFE_AUDIO if copy_ok is None else copy_ok & _WEB_SAFE_AUDIO
     enc = _AENC.get(ext, "aac")
-    filters = _audio_filters(spec, info)
+    filters = _audio_filters(spec, info, speed)
     want_copy = spec.audio_mode == "keep" and not filters
     if want_copy:
         if copy_ok is None or info.a_codec in copy_ok:
             return ["-c:a", "copy"]
         notes.append(f"{info.a_codec or 'source audio'} can't be copied "
                      f"into .{ext} — re-encoding")
-    elif spec.audio_mode == "keep":
+    elif spec.audio_mode == "keep" and speed is None:
         notes.append(f"{_filter_why(spec, info)} needs a re-encode")
     return ["-c:a", enc, "-b:a", f"{spec.audio_bitrate}k"] + filters
 

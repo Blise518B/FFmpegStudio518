@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QComboBox,
                                QRadioButton, QSlider, QSpinBox, QVBoxLayout,
                                QWidget)
 
+from ..ffmpeg.command import format_seconds, parse_time
 from ..spec import (AUDIO_MODE_LABELS, CONTAINER_LABELS, CONTAINER_ORDER,
                     PRESETS, SCALE_LABELS, SCALE_ORDER, VIDEO_CODEC_LABELS,
                     JobSpec)
@@ -180,6 +181,22 @@ class ActionsPanel(QWidget):
         lay.addWidget(tr)
         self.sec_trim = tr
 
+        # ---- Timelapse (cyan) -----------------------------------------
+        tl = Section("Timelapse", "cyan")
+        self.timelapse_on = QCheckBox("Speed the clip up to a set length")
+        tl.add_row("", self.timelapse_on)
+        self.timelapse_len = QLineEdit()
+        self.timelapse_len.setPlaceholderText("0:30")
+        tl.add_row("Make it", self.timelapse_len,
+                   hint="how long the result should be — the speed-up is "
+                        "worked out per file · 30 · 0:30 · 1:30")
+        self.timelapse_note = QLabel("")
+        self.timelapse_note.setObjectName("Hint")
+        self.timelapse_note.setWordWrap(True)
+        tl.add_wide(self.timelapse_note)
+        lay.addWidget(tl)
+        self.sec_timelapse = tl
+
         # ---- GIF / WebP (red) -----------------------------------------
         an = Section("GIF / WebP", "red")
         self.anim_fps = QSpinBox()
@@ -222,12 +239,12 @@ class ActionsPanel(QWidget):
                      self.anim_fps, self.anim_width):
             spin.valueChanged.connect(self._on_change)
         for check in (self.flip_h, self.flip_v, self.normalize, self.mono,
-                      self.trim_on):
+                      self.trim_on, self.timelapse_on):
             check.toggled.connect(self._on_change)
         for radio in (self.rate_crf, self.rate_bitrate, self.rate_size):
             radio.toggled.connect(self._on_change)
         for edit in (self.trim_start, self.trim_end, self.suffix,
-                     self.custom_args):
+                     self.custom_args, self.timelapse_len):
             edit.textChanged.connect(self._on_change)
         self.crf.valueChanged.connect(self._on_change)
 
@@ -250,6 +267,16 @@ class ActionsPanel(QWidget):
         self.vcodec.blockSignals(False)
 
     # -- spec <-> widgets ------------------------------------------------
+    def _timelapse_seconds(self) -> float:
+        """Parse the target length; fall back to 30s while it's half-typed."""
+        text = self.timelapse_len.text().strip()
+        if not text:
+            return 30.0
+        try:
+            return max(0.1, parse_time(text))
+        except ValueError:
+            return 30.0
+
     def get_spec(self) -> JobSpec:
         fps_data = self.fps.currentData()
         return JobSpec(
@@ -276,6 +303,8 @@ class ActionsPanel(QWidget):
             audio_bitrate=self.abitrate.currentData(),
             normalize=self.normalize.isChecked(),
             mono=self.mono.isChecked(),
+            timelapse=self.timelapse_on.isChecked(),
+            timelapse_seconds=self._timelapse_seconds(),
             trim=self.trim_on.isChecked(),
             trim_start=self.trim_start.text(),
             trim_end=self.trim_end.text(),
@@ -335,6 +364,8 @@ class ActionsPanel(QWidget):
             self.abitrate.setCurrentIndex(idx)
             self.normalize.setChecked(spec.normalize)
             self.mono.setChecked(spec.mono)
+            self.timelapse_on.setChecked(spec.timelapse)
+            self.timelapse_len.setText(format_seconds(spec.timelapse_seconds))
             self.trim_on.setChecked(spec.trim)
             self.trim_start.setText(spec.trim_start)
             self.trim_end.setText(spec.trim_end)
@@ -398,6 +429,12 @@ class ActionsPanel(QWidget):
             w.setEnabled(self.scale.currentData() == "custom")
         self.fps_custom.setEnabled(self.fps.currentData() == "custom")
         self.fps.setEnabled(is_video)
+
+        # timelapse: length box only matters once it's switched on
+        self.timelapse_len.setEnabled(self.timelapse_on.isChecked())
+        self.sec_timelapse.setEnabled(is_video or is_anim)
+        self.sec_timelapse.badge.setText(
+            "" if (is_video or is_anim) else "video only")
 
         # section badges show why something is off
         self.sec_video.badge.setText("" if is_video else "n/a for this format")

@@ -98,6 +98,9 @@ class JobSpec:
     audio_bitrate: int = 192        # kbps for lossy targets
     normalize: bool = False         # loudnorm filter (forces re-encode)
     mono: bool = False              # equal L+R downmix (forces re-encode)
+    # --- timelapse ------------------------------------------------------
+    timelapse: bool = False         # squeeze the clip into timelapse_seconds
+    timelapse_seconds: float = 30.0
     # --- trim -----------------------------------------------------------
     trim: bool = False
     trim_start: str = ""            # "HH:MM:SS(.ms)" / "M:SS" / "seconds"
@@ -175,6 +178,8 @@ class JobSpec:
                      "remove": "audio removed"}.get(self.audio_mode, "")
             if audio:
                 bits.append(audio)
+        if self.timelapse:
+            bits.append(f"timelapse to {self.timelapse_seconds:g}s")
         if self.mono:
             bits.append("mono downmix")
         if self.normalize:

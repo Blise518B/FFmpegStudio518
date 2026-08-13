@@ -30,9 +30,12 @@ profile, press start. No command line, no install.
 - **Audio** — extract MP3/M4A/Opus/FLAC/WAV, strip it, normalize loudness, or
   fold stereo down to mono with an **equal L+R mix** (fixes VRChat POV
   recordings where the music swings between your ears)
+- **Timelapse** — say how long the result should be and it works out the
+  speed-up per file, so a 2-minute clip and a 2-hour one both land on the
+  length you asked for. Works for GIFs too
 - **Trim & clips** — cut a time range, palette-based GIFs, WebP, thumbnails
 - **Profiles** — save a whole setup under a name and reload it in one click;
-  rename, export and import them as JSON to share. Fifteen ship with the app,
+  rename, export and import them as JSON to share. Sixteen ship with the app,
   and hovering any of them explains what it's for and what it will do
 - **Subfolders** — process a whole tree at once, mirrored into the output
   folder, with the output folder itself always skipped
@@ -71,7 +74,7 @@ Windows SmartScreen will complain about the unsigned exe —
     start.bat        # sets up .venv and launches
 
 Python 3.10+. `build.bat` builds the exe. `python -m unittest discover -s
-tests` runs the suite (102 tests, including integration tests that drive real
+tests` runs the suite (117 tests, including integration tests that drive real
 ffmpeg encodes when it's installed).
 
 ## License

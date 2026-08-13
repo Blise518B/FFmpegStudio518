@@ -450,6 +450,97 @@ class TestMonoDownmix(unittest.TestCase):
         self.assertNotIn("-af", args)
 
 
+class TestTimelapse(unittest.TestCase):
+    """Pick an output length; the speed-up is derived per file."""
+
+    def _plan(self, seconds=30.0, **kw):
+        spec = JobSpec(container="mp4", video_codec="h264",
+                       timelapse=True, timelapse_seconds=seconds,
+                       audio_mode=kw.pop("audio_mode", "remove"), **kw)
+        return build_plan(spec, info(**{"duration": kw.pop("src", 600.0),
+                                        **kw.pop("info_kw", {})}), OUT)
+
+    def test_speed_matches_the_target_length(self):
+        # 600 s squeezed into 30 s is 20x
+        plan = self._plan(seconds=30.0)
+        vf = flat(plan)[flat(plan).index("-vf") + 1]
+        self.assertIn("setpts=PTS/20", vf)
+
+    def test_progress_uses_the_output_length(self):
+        plan = self._plan(seconds=30.0)
+        self.assertEqual(plan.duration, 30.0)
+
+    def test_output_frame_rate_is_normalised(self):
+        plan = self._plan(seconds=30.0)
+        vf = flat(plan)[flat(plan).index("-vf") + 1]
+        self.assertRegex(vf, r"fps=\d")
+        self.assertLess(vf.index("setpts"), vf.index("fps="))
+
+    def test_trim_defines_the_source_length(self):
+        # 60 s of a 600 s clip, into 30 s, is 2x — not 20x
+        spec = JobSpec(container="mp4", video_codec="h264", timelapse=True,
+                       timelapse_seconds=30.0, audio_mode="remove",
+                       trim=True, trim_start="0:10", trim_end="1:10")
+        plan = build_plan(spec, info(duration=600.0), OUT)
+        vf = flat(plan)[flat(plan).index("-vf") + 1]
+        self.assertIn("setpts=PTS/2", vf)
+
+    def test_longer_target_slows_it_down(self):
+        plan = self._plan(seconds=1200.0)      # 600 s -> 1200 s
+        vf = flat(plan)[flat(plan).index("-vf") + 1]
+        self.assertIn("setpts=PTS/0.5", vf)
+        self.assertTrue(any("slower" in n for n in plan.notes))
+
+    def test_unknown_duration_is_reported_not_guessed(self):
+        spec = JobSpec(container="mp4", timelapse=True, audio_mode="remove")
+        plan = build_plan(spec, info(duration=None), OUT)
+        self.assertNotIn("setpts", " ".join(flat(plan)))
+        self.assertTrue(any("can't work out" in n for n in plan.notes))
+
+    def test_copy_is_upgraded_to_a_real_encode(self):
+        spec = JobSpec(container="mp4", video_codec="copy", timelapse=True,
+                       timelapse_seconds=30.0, audio_mode="remove")
+        plan = build_plan(spec, info(duration=600.0), OUT)
+        args = flat(plan)
+        self.assertIn("libx264", args)          # retiming can't stream-copy
+        self.assertIn("setpts=PTS/20", args[args.index("-vf") + 1])
+
+    def test_mild_speedup_keeps_audio_in_step(self):
+        spec = JobSpec(container="mp4", video_codec="h264", timelapse=True,
+                       timelapse_seconds=300.0, audio_mode="keep")
+        plan = build_plan(spec, info(duration=600.0), OUT)   # 2x
+        args = flat(plan)
+        self.assertEqual(args[args.index("-af") + 1], "atempo=2")
+        self.assertNotIn("-an", args)
+
+    def test_big_speedup_drops_audio(self):
+        spec = JobSpec(container="mp4", video_codec="h264", timelapse=True,
+                       timelapse_seconds=30.0, audio_mode="keep")
+        plan = build_plan(spec, info(duration=600.0), OUT)   # 20x
+        args = flat(plan)
+        self.assertIn("-an", args)
+        self.assertTrue(any("Audio dropped" in n for n in plan.notes))
+
+    def test_atempo_chains_past_two(self):
+        spec = JobSpec(container="mp4", video_codec="h264", timelapse=True,
+                       timelapse_seconds=200.0, audio_mode="keep")
+        plan = build_plan(spec, info(duration=600.0), OUT)   # 3x
+        chain = flat(plan)[flat(plan).index("-af") + 1]
+        self.assertEqual(chain, "atempo=2,atempo=1.5")
+
+    def test_gif_timelapse(self):
+        spec = JobSpec(container="gif", timelapse=True, timelapse_seconds=5.0)
+        plan = build_plan(spec, info(duration=100.0), OUT)
+        graph = flat(plan)[flat(plan).index("-filter_complex") + 1]
+        self.assertIn("setpts=PTS/20", graph)
+
+    def test_ignored_for_audio_output(self):
+        spec = JobSpec(container="mp3", timelapse=True, audio_mode="encode")
+        plan = build_plan(spec, info(duration=600.0), OUT)
+        self.assertNotIn("setpts", " ".join(flat(plan)))
+        self.assertTrue(any("doesn't apply" in n for n in plan.notes))
+
+
 class TestAnimAndImage(unittest.TestCase):
     def test_gif_palette(self):
         plan = build_plan(JobSpec(container="gif", anim_fps=15,

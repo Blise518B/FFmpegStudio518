@@ -165,6 +165,36 @@ class TestRealFFmpeg(unittest.TestCase):
         self.assertEqual(shared.pix_fmt, "yuv420p")
         self.assertEqual(plan.output.suffix, ".mp4")
 
+    def test_timelapse_lands_on_the_requested_length(self):
+        """The whole promise of the feature: say 1 s, get 1 s."""
+        out = self._run_plan(JobSpec(container="mp4", video_codec="h264",
+                                     preset="ultrafast", timelapse=True,
+                                     timelapse_seconds=1.0,
+                                     audio_mode="remove"))
+        info = probe(INSTALL.ffprobe, out)
+        self.assertAlmostEqual(info.duration, 1.0, delta=0.2)
+
+    def test_timelapse_profile_works_end_to_end(self):
+        from ffmpeg_studio import profiles as prof
+        prof.ensure_defaults()
+        spec = prof.load_profile("Timelapse (30 seconds)")
+        self.assertIsNotNone(spec)
+        spec.timelapse_seconds = 0.5      # keep the test quick
+        spec.preset = "ultrafast"
+        out = self._run_plan(spec)
+        info = probe(INSTALL.ffprobe, out)
+        self.assertAlmostEqual(info.duration, 0.5, delta=0.2)
+        self.assertFalse(info.has_audio)   # profile drops it
+
+    def test_timelapse_keeps_audio_in_step_at_low_speed(self):
+        out = self._run_plan(JobSpec(container="mp4", video_codec="h264",
+                                     preset="ultrafast", timelapse=True,
+                                     timelapse_seconds=1.0,
+                                     audio_mode="keep"))
+        info = probe(INSTALL.ffprobe, out)   # 2 s -> 1 s == 2x, audio kept
+        self.assertTrue(info.has_audio)
+        self.assertAlmostEqual(info.duration, 1.0, delta=0.2)
+
     def test_mono_downmix_produces_one_channel(self):
         out = self._run_plan(JobSpec(container="mp4", video_codec="copy",
                                      audio_mode="encode", mono=True))

@@ -153,6 +153,10 @@ DEFAULT_PROFILES: dict[str, JobSpec] = {
         container="mp3", audio_mode="encode", audio_bitrate=320),
     "Extract audio untouched (M4A)": JobSpec(
         container="m4a", audio_mode="keep"),
+    "Timelapse (30 seconds)": JobSpec(
+        container="mp4", video_codec="h264", crf=20, preset="medium",
+        timelapse=True, timelapse_seconds=30.0, audio_mode="remove",
+        suffix="_timelapse"),
     "High-quality GIF": JobSpec(
         container="gif", anim_fps=15, anim_width=480),
     "720p 30fps (small share)": JobSpec(
@@ -216,6 +220,10 @@ PROFILE_NOTES = {
     "Extract audio untouched (M4A)":
         "Lifts the audio out without re-encoding it where possible — no "
         "quality lost.",
+    "Timelapse (30 seconds)":
+        "Squeezes each clip into 30 seconds, however long it started out — "
+        "the speed-up is worked out per file. Change the length in the "
+        "Timelapse box. Audio is dropped.",
     "High-quality GIF":
         "Builds a colour palette per clip, so the GIF looks far better than "
         "a naive conversion.",
