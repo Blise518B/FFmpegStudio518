@@ -26,14 +26,38 @@ def flat(plan) -> list[str]:
 
 
 class TestParseTime(unittest.TestCase):
-    def test_forms(self):
-        self.assertEqual(parse_time("90"), 90.0)
-        self.assertEqual(parse_time("90.5"), 90.5)
+    def test_colon_form_reads_right_to_left(self):
         self.assertEqual(parse_time("1:30"), 90.0)
         self.assertEqual(parse_time("01:02:03.5"), 3723.5)
+        self.assertEqual(parse_time("0:05"), 5.0)
+
+    def test_bare_number_is_seconds(self):
+        self.assertEqual(parse_time("90"), 90.0)
+        self.assertEqual(parse_time("90.5"), 90.5)
+        self.assertEqual(parse_time("5"), 5.0)
+
+    def test_unit_suffixes(self):
+        self.assertEqual(parse_time("90s"), 90.0)
+        self.assertEqual(parse_time("2m"), 120.0)
+        self.assertEqual(parse_time("1h"), 3600.0)
+        self.assertEqual(parse_time("2m30s"), 150.0)
+        self.assertEqual(parse_time("1h30m"), 5400.0)
+        self.assertEqual(parse_time("1h2m3s"), 3723.0)
+        self.assertEqual(parse_time("1.5m"), 90.0)
+
+    def test_units_are_forgiving_about_spelling_and_spaces(self):
+        for text in ("1h 30m", "1 hour 30 min", "90 sec", "1hr30mins"):
+            parse_time(text)          # must not raise
+        self.assertEqual(parse_time("1 hour 30 min"), 5400.0)
+        self.assertEqual(parse_time("90 SEC"), 90.0)
+
+    def test_the_three_forms_agree(self):
+        self.assertEqual(parse_time("1:30"), parse_time("90"))
+        self.assertEqual(parse_time("90"), parse_time("1m30s"))
 
     def test_bad(self):
-        for bad in ("", "a", "1:2:3:4", "1::2", "-5"):
+        for bad in ("", "a", "1:2:3:4", "1::2", "-5", "5x", "m", "1m2h",
+                    "banana", "1:2:3s"):
             with self.assertRaises(ValueError):
                 parse_time(bad)
 

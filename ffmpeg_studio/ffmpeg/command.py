@@ -36,17 +36,48 @@ class JobPlan:
 # small helpers
 # ---------------------------------------------------------------------------
 
+# "1h30m", "2m30s", "90s" — longest spellings first so "min" doesn't get
+# eaten by the "m" branch.
+_UNIT_TIME = re.compile(
+    r"""^\s*
+        (?:(?P<h>\d+(?:\.\d+)?)\s*(?:hours|hour|hrs|hr|h)\s*)?
+        (?:(?P<m>\d+(?:\.\d+)?)\s*(?:minutes|minute|mins|min|m)\s*)?
+        (?:(?P<s>\d+(?:\.\d+)?)\s*(?:seconds|second|secs|sec|s)\s*)?
+        $""",
+    re.VERBOSE | re.IGNORECASE)
+
+
 def parse_time(text: str) -> float:
-    """'90', '90.5', '1:30', '01:02:03.25' -> seconds. Raises ValueError."""
+    """Read a length the way a video player writes one.
+
+    Accepted, all meaning the same 90 seconds::
+
+        1:30        colons, right to left: [hh:]mm:ss
+        90          a bare number is seconds
+        1m30s       explicit units (h/m/s, also min, secs, hours…)
+
+    Raises ValueError on anything else.
+    """
     text = (text or "").strip()
     if not text:
         raise ValueError("empty time")
-    parts = text.split(":")
-    if len(parts) > 3 or any(p.strip() == "" for p in parts):
-        raise ValueError(f"bad time: {text!r}")
-    seconds = 0.0
-    for part in parts:
-        seconds = seconds * 60 + float(part)
+
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) > 3 or any(p.strip() == "" for p in parts):
+            raise ValueError(f"bad time: {text!r}")
+        seconds = 0.0
+        for part in parts:
+            seconds = seconds * 60 + float(part)
+    else:
+        match = _UNIT_TIME.match(text)
+        if match and any(match.group(g) for g in ("h", "m", "s")):
+            seconds = (float(match.group("h") or 0) * 3600
+                       + float(match.group("m") or 0) * 60
+                       + float(match.group("s") or 0))
+        else:
+            seconds = float(text)          # bare number: seconds
+
     if seconds < 0:
         raise ValueError("negative time")
     return seconds

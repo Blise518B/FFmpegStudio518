@@ -20,6 +20,10 @@ from .widgets import Section, hrow
 
 _CPU_CODECS = ["auto", "copy", "h264", "h264_compat", "h264rgb", "hevc",
                "vp9", "av1"]
+
+# One sentence, used under every time box so the rule is stated in the same
+# words everywhere: colons like a video player, a bare number is seconds.
+TIME_HINT = "1:30 · 90 (seconds) · 2m30s · 1:02:03"
 _GPU_CODECS = ["h264_nvenc", "hevc_nvenc", "av1_nvenc"]
 
 
@@ -177,7 +181,11 @@ class ActionsPanel(QWidget):
         self.trim_end.setPlaceholderText("end")
         tr.add_row("From / to", hrow(self.trim_start, QLabel("→"),
                                      self.trim_end),
-                   hint="formats: 90 · 1:30 · 0:01:30.5 — empty end = play out")
+                   hint=TIME_HINT + " — leave the end empty to play out")
+        self.trim_note = QLabel("")
+        self.trim_note.setObjectName("Hint")
+        self.trim_note.setWordWrap(True)
+        tr.add_row("", self.trim_note)      # under the boxes, like the hints
         lay.addWidget(tr)
         self.sec_trim = tr
 
@@ -189,11 +197,11 @@ class ActionsPanel(QWidget):
         self.timelapse_len.setPlaceholderText("0:30")
         tl.add_row("Make it", self.timelapse_len,
                    hint="how long the result should be — the speed-up is "
-                        "worked out per file · 30 · 0:30 · 1:30")
+                        "worked out per file · " + TIME_HINT)
         self.timelapse_note = QLabel("")
         self.timelapse_note.setObjectName("Hint")
         self.timelapse_note.setWordWrap(True)
-        tl.add_wide(self.timelapse_note)
+        tl.add_row("", self.timelapse_note)
         lay.addWidget(tl)
         self.sec_timelapse = tl
 
@@ -265,6 +273,68 @@ class ActionsPanel(QWidget):
             idx = self.vcodec.findData(keep)
             self.vcodec.setCurrentIndex(idx if idx >= 0 else 0)
         self.vcodec.blockSignals(False)
+
+    # -- live time feedback ----------------------------------------------
+    @staticmethod
+    def _set_note(label: QLabel, text: str, bad: bool = False) -> None:
+        """Amber for 'I can't read that', normal grey otherwise."""
+        label.setText(text)
+        wanted = "WarnNote" if bad else "Hint"
+        if label.objectName() != wanted:
+            label.setObjectName(wanted)
+            label.style().unpolish(label)
+            label.style().polish(label)
+
+    def _update_time_notes(self) -> None:
+        """Echo back exactly how each time box was understood."""
+        # --- timelapse ---
+        text = self.timelapse_len.text().strip()
+        if not self.timelapse_on.isChecked():
+            self._set_note(self.timelapse_note, "")
+        elif not text:
+            self._set_note(self.timelapse_note,
+                           "empty — defaults to 0:30 (30 seconds)")
+        else:
+            try:
+                secs = parse_time(text)
+                self._set_note(
+                    self.timelapse_note,
+                    f"reads as {format_seconds(secs)} · {secs:g} seconds")
+            except ValueError:
+                self._set_note(self.timelapse_note,
+                               f"can't read “{text}” — try {TIME_HINT}", True)
+
+        # --- trim ---
+        if not self.trim_on.isChecked():
+            self._set_note(self.trim_note, "")
+            return
+        start_txt = self.trim_start.text().strip()
+        end_txt = self.trim_end.text().strip()
+        try:
+            start = parse_time(start_txt) if start_txt else 0.0
+        except ValueError:
+            self._set_note(self.trim_note,
+                           f"can't read the start “{start_txt}”", True)
+            return
+        if not end_txt:
+            self._set_note(self.trim_note,
+                           f"from {format_seconds(start)} to the end")
+            return
+        try:
+            end = parse_time(end_txt)
+        except ValueError:
+            self._set_note(self.trim_note,
+                           f"can't read the end “{end_txt}”", True)
+            return
+        if end <= start:
+            self._set_note(self.trim_note,
+                           "the end is before the start — it'll be ignored",
+                           True)
+            return
+        self._set_note(
+            self.trim_note,
+            f"{format_seconds(start)} → {format_seconds(end)} · "
+            f"keeps {format_seconds(end - start)}")
 
     # -- spec <-> widgets ------------------------------------------------
     def _timelapse_seconds(self) -> float:
@@ -432,6 +502,7 @@ class ActionsPanel(QWidget):
 
         # timelapse: length box only matters once it's switched on
         self.timelapse_len.setEnabled(self.timelapse_on.isChecked())
+        self._update_time_notes()
         self.sec_timelapse.setEnabled(is_video or is_anim)
         self.sec_timelapse.badge.setText(
             "" if (is_video or is_anim) else "video only")

@@ -66,6 +66,10 @@ Windows SmartScreen will complain about the unsigned exe —
   existing files get ` (1)` rather than being overwritten unless you turn
   that on in ⚙
 - Two themes, **Neon** and **Midnight**, in the ⚙ menu
+- **Times** are written the way a video player shows them: `1:30` is a minute
+  and a half, `1:02:03` is hours:minutes:seconds, and a bare number is
+  **seconds** (`90`). Units work too — `90s`, `2m30s`, `1h30m`. Whatever you
+  type, the line under the box tells you how it was read
 
 ## From source
 
@@ -74,7 +78,7 @@ Windows SmartScreen will complain about the unsigned exe —
     start.bat        # sets up .venv and launches
 
 Python 3.10+. `build.bat` builds the exe. `python -m unittest discover -s
-tests` runs the suite (117 tests, including integration tests that drive real
+tests` runs the suite (121 tests, including integration tests that drive real
 ffmpeg encodes when it's installed).
 
 ## License
