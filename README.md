@@ -8,7 +8,7 @@ profile, press start. No command line, no install.
   <a href="https://github.com/Blise518B/FFmpegStudio518/releases/latest/download/FFmpegStudio518-Windows.exe">
     <img src="docs/download-badge.svg" alt="Download for Windows — FFmpegStudio518-Windows.exe, latest release">
   </a><br>
-  <sub>🐧 Linux? Run it from source for now — an AppImage is on the way to the
+  <sub>🐧 Linux? The AppImage is on the
   <a href="https://github.com/Blise518B/FFmpegStudio518/releases/latest">Releases</a> page.</sub>
 </p>
 
