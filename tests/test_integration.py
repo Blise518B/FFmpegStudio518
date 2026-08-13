@@ -174,6 +174,18 @@ class TestRealFFmpeg(unittest.TestCase):
         info = probe(INSTALL.ffprobe, out)
         self.assertAlmostEqual(info.duration, 1.0, delta=0.2)
 
+    def test_trim_then_timelapse_lands_on_the_target(self):
+        """Timelapsing only part of a clip: the trim picks the section, the
+        timelapse length applies to that section."""
+        out = self._run_plan(JobSpec(container="mp4", video_codec="h264",
+                                     preset="ultrafast",
+                                     trim=True, trim_start="0.5",
+                                     trim_end="1.5",
+                                     timelapse=True, timelapse_seconds=0.5,
+                                     audio_mode="remove"))
+        info = probe(INSTALL.ffprobe, out)
+        self.assertAlmostEqual(info.duration, 0.5, delta=0.2)
+
     def test_timelapse_profile_works_end_to_end(self):
         from ffmpeg_studio import profiles as prof
         prof.ensure_defaults()

@@ -78,7 +78,7 @@ Windows SmartScreen will complain about the unsigned exe —
     start.bat        # sets up .venv and launches
 
 Python 3.10+. `build.bat` builds the exe. `python -m unittest discover -s
-tests` runs the suite (121 tests, including integration tests that drive real
+tests` runs the suite (123 tests, including integration tests that drive real
 ffmpeg encodes when it's installed).
 
 ## License

@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "1.2.0"
+__version__ = "1.2.1"
 
 APP_NAME = "FFmpeg Studio 518"
 APP_DIRNAME = "FFmpegStudio518"

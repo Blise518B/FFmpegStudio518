@@ -283,12 +283,15 @@ def build_plan(spec: JobSpec, info: MediaInfo, out_dir: Path,
             if speed:
                 out_duration = spec.timelapse_seconds
 
+    # both trim options go BEFORE -i so they bound what is *read*. After -i,
+    # -t bounds the output instead, and a filter that retimes the stream
+    # (timelapse) then quietly swallows the rest of the file.
     head: list[str] = ["-hide_banner", "-y"]
     if trim_start is not None:
         head += ["-ss", _fnum(trim_start)]
-    head += ["-i", str(info.path)]
     if trim_dur is not None:
         head += ["-t", _fnum(trim_dur)]
+    head += ["-i", str(info.path)]
 
     if kind == "audio":
         body = _audio_only(spec, info, ext, notes)

@@ -500,6 +500,18 @@ class TestTimelapse(unittest.TestCase):
         self.assertRegex(vf, r"fps=\d")
         self.assertLess(vf.index("setpts"), vf.index("fps="))
 
+    def test_trim_bounds_the_read_not_the_output(self):
+        """-t must sit before -i. After it, it limits the *output*, and a
+        retiming filter then reads to the end of the file instead of the
+        trim end — asking for 3 s of 0:10–0:40 silently gave 5 s."""
+        spec = JobSpec(container="mp4", video_codec="h264", timelapse=True,
+                       timelapse_seconds=3.0, audio_mode="remove",
+                       trim=True, trim_start="0:10", trim_end="0:40")
+        args = flat(build_plan(spec, info(duration=60.0), OUT))
+        self.assertLess(args.index("-t"), args.index("-i"))
+        self.assertLess(args.index("-ss"), args.index("-i"))
+        self.assertEqual(args[args.index("-t") + 1], "30")
+
     def test_trim_defines_the_source_length(self):
         # 60 s of a 600 s clip, into 30 s, is 2x — not 20x
         spec = JobSpec(container="mp4", video_codec="h264", timelapse=True,
