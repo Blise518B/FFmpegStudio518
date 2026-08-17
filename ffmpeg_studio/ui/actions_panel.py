@@ -270,9 +270,18 @@ class ActionsPanel(QWidget):
         for key in _CPU_CODECS + [g for g in _GPU_CODECS if g in self._gpu]:
             self.vcodec.addItem(VIDEO_CODEC_LABELS[key], key)
         if keep is not None:
-            idx = self.vcodec.findData(keep)
-            self.vcodec.setCurrentIndex(idx if idx >= 0 else 0)
+            self.vcodec.setCurrentIndex(self._index_of(keep))
         self.vcodec.blockSignals(False)
+
+    def _index_of(self, codec: str) -> int:
+        """Index for ``codec``, adding it if the list doesn't carry it (e.g.
+        an NVENC profile loaded before GPU detection finished). Substituting
+        a different codec here would silently rewrite the profile on Save."""
+        idx = self.vcodec.findData(codec)
+        if idx < 0 and codec in VIDEO_CODEC_LABELS:
+            self.vcodec.addItem(VIDEO_CODEC_LABELS[codec], codec)
+            idx = self.vcodec.count() - 1
+        return max(0, idx)
 
     # -- live time feedback ----------------------------------------------
     @staticmethod
@@ -389,13 +398,10 @@ class ActionsPanel(QWidget):
         try:
             idx = self.container.findData(spec.container)
             self.container.setCurrentIndex(max(0, idx))
-            idx = self.vcodec.findData(spec.video_codec)
-            if idx < 0 and spec.video_codec.endswith("_nvenc"):
-                # profile wants GPU but this machine has none — builder
-                # falls back at run time; select the CPU twin for clarity
-                idx = self.vcodec.findData(
-                    spec.video_codec.replace("_nvenc", ""))
-            self.vcodec.setCurrentIndex(max(0, idx))
+            # keep the profile's codec even if the combo doesn't list it yet
+            # (GPU detection still running) — the builder falls back at run
+            # time if the machine truly lacks it, and Save stays faithful
+            self.vcodec.setCurrentIndex(self._index_of(spec.video_codec))
             {"crf": self.rate_crf, "bitrate": self.rate_bitrate,
              "size": self.rate_size}.get(spec.rate_mode,
                                          self.rate_crf).setChecked(True)

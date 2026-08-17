@@ -25,6 +25,10 @@ class Job:
     status: str = "pending"        # pending|running|done|error|cancelled
     message: str = ""
     log: list[str] = field(default_factory=list)
+    # True once the output-writing pass has actually produced activity —
+    # cleanup must never delete a pre-existing file this run never touched
+    # (overwrite mode + FailedToStart, or 2-pass dying in pass 1).
+    wrote_output: bool = False
 
 
 class JobRunner(QObject):
@@ -104,6 +108,8 @@ class JobRunner(QObject):
         job, proc = self._current(), self._proc
         if job is None or proc is None:
             return
+        if self._pass == len(job.plan.passes) - 1:
+            job.wrote_output = True
         self._stdout_buf += bytes(proc.readAllStandardOutput()).decode(
             "utf-8", "replace")
         *lines, self._stdout_buf = self._stdout_buf.split("\n")
@@ -129,6 +135,8 @@ class JobRunner(QObject):
         job, proc = self._current(), self._proc
         if job is None or proc is None:
             return
+        if self._pass == len(job.plan.passes) - 1:
+            job.wrote_output = True    # final pass is running; -y truncates
         text = bytes(proc.readAllStandardError()).decode("utf-8", "replace")
         if text:
             job.log.append(text)
@@ -173,7 +181,7 @@ class JobRunner(QObject):
         self._next_job()
 
     def _cleanup(self, job: Job, keep_output: bool) -> None:
-        if not keep_output:
+        if not keep_output and job.wrote_output:
             try:
                 job.plan.output.unlink(missing_ok=True)
             except OSError:

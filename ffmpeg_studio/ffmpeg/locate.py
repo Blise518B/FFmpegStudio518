@@ -135,6 +135,13 @@ def download_ffmpeg(progress, is_cancelled) -> FFmpegInstall:
     ``progress(done_bytes, total_bytes, message)`` is called along the way;
     ``is_cancelled()`` is polled so the UI can abort. Raises on failure.
     """
+    if sys.platform != "win32":
+        # DOWNLOAD_URL is a Windows build (bin/ffmpeg.exe) — extracting it
+        # here could only ever fail after the full 90 MB download
+        raise RuntimeError(
+            "automatic download is Windows-only — install ffmpeg with your "
+            "package manager (e.g. sudo apt install ffmpeg)")
+
     dest = download_dir()
     dest.mkdir(parents=True, exist_ok=True)
 

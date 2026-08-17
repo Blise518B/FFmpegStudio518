@@ -2,6 +2,7 @@
 run bar with live progress, collapsible log."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, Qt, QThread, QTimer, QUrl, Signal
@@ -43,7 +44,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.settings = settings
         self.install: locate.FFmpegInstall | None = None
-        self.gpu_encoders: set[str] = set()
+        # None = detection hasn't finished yet ("unknown"), which build_plan
+        # treats differently from set() ("proven absent"): an explicit NVENC
+        # profile keeps its codec instead of silently downgrading to CPU.
+        self.gpu_encoders: set[str] | None = None
         self.runner: JobRunner | None = None
         self._jobs_by_row: dict[int, Job] = {}
         self._loaded_spec: dict | None = None
@@ -336,6 +340,15 @@ class MainWindow(QMainWindow):
                 + ", ".join(sorted(self.gpu_encoders)))
 
     def _offer_download(self) -> None:
+        if sys.platform != "win32":
+            # the auto-download is a Windows build; offering it here would
+            # only ever fail after the full 90 MB
+            QMessageBox.information(
+                self, "FFmpeg not found",
+                "This app drives FFmpeg, but none was found.\n\nInstall it "
+                "with your package manager (e.g. sudo apt install ffmpeg "
+                "or flatpak/dnf/pacman equivalents), then restart the app.")
+            return
         answer = QMessageBox.question(
             self, "FFmpeg not found",
             "This app drives FFmpeg, but no ffmpeg.exe was found on this "
@@ -345,6 +358,9 @@ class MainWindow(QMainWindow):
             self._download_ffmpeg()
 
     def _download_ffmpeg(self) -> None:
+        if sys.platform != "win32":
+            self._offer_download()
+            return
         dlg = DownloadDialog(self)
         if dlg.exec() and dlg.install is not None:
             self._locate_ffmpeg()
@@ -593,11 +609,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Nothing to do",
                                     "No files are selected in the list.")
             return
-        out_dir = Path(self.out_row.path() or "")
-        if not str(out_dir):
+        out_text = self.out_row.path()
+        if not out_text:
+            # NB: test the raw string — str(Path("")) is ".", never falsy
             QMessageBox.information(self, "Output folder",
                                     "Pick an output folder first.")
             return
+        out_dir = Path(out_text)
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
@@ -608,6 +626,7 @@ class MainWindow(QMainWindow):
         spec = self.actions.get_spec()
         in_root = Path(self.in_row.path() or "")
         jobs: list[Job] = []
+        taken: set[str] = set()   # outputs already claimed by this batch
         self.files.clear_statuses()
         skipped = 0
         for row, path in enumerate(files):
@@ -619,7 +638,8 @@ class MainWindow(QMainWindow):
                 plan = build_plan(spec, info, target_dir,
                                   overwrite=self.settings.overwrite,
                                   gpu_encoders=self.gpu_encoders,
-                                  gpu_decode=self.settings.gpu_decode)
+                                  gpu_decode=self.settings.gpu_decode,
+                                  taken=taken)
             except BuildError as exc:
                 self.files.set_status(path, f"✖ {exc}")
                 skipped += 1
@@ -628,7 +648,12 @@ class MainWindow(QMainWindow):
                 self.files.set_status(path, f"✖ {exc.strerror or exc}")
                 skipped += 1
                 continue
+            taken.add(str(plan.output).lower())
             jobs.append(Job(src=path, plan=plan, row=row))
+            # surface the plan's decisions at run time, not just in the
+            # preview — the log is where you look when a run surprises you
+            for note in plan.notes:
+                self.log_view.appendPlainText(f"[{path.name}] {note}")
         if not jobs:
             QMessageBox.information(
                 self, "Nothing to do",

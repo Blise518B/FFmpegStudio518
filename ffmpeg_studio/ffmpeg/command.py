@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..spec import (ANIM_CONTAINERS, AUDIO_CONTAINERS, IMAGE_CONTAINERS,
-                    VIDEO_CONTAINERS, JobSpec)
+                    VIDEO_CODEC_LABELS, VIDEO_CONTAINERS, JobSpec)
 from .probe import MediaInfo
 
 
@@ -102,18 +102,25 @@ def _fnum(x: float) -> str:
 
 
 def resolve_output(src: Path, out_dir: Path, ext: str, suffix: str,
-                   overwrite: bool) -> Path:
+                   overwrite: bool, taken: set[str] | None = None) -> Path:
     """Output path: same stem + optional suffix; never the source file itself;
-    appends ' (1)', ' (2)'… instead of clobbering unless overwrite is on."""
+    appends ' (1)', ' (2)'… instead of clobbering unless overwrite is on.
+
+    ``taken`` holds lower-cased paths other jobs in the SAME batch will write.
+    Plans are all built before any job runs, so exists() alone can't see those
+    — and colliding with one would silently destroy a sibling's result, so a
+    batch collision always gets a ' (n)' name, even in overwrite mode.
+    """
+    def clashes(p: Path) -> bool:
+        return taken is not None and str(p).lower() in taken
+
     stem = src.stem + (suffix or "")
     cand = out_dir / f"{stem}.{ext}"
     if _same_file(cand, src):
         stem += "_out"
         cand = out_dir / f"{stem}.{ext}"
-    if overwrite:
-        return cand
     n = 1
-    while cand.exists():
+    while clashes(cand) or (not overwrite and cand.exists()):
         cand = out_dir / f"{stem} ({n}).{ext}"
         n += 1
     return cand
@@ -191,8 +198,9 @@ def gpu_pipeline_ok(info: MediaInfo, codec: str, vf: list[str]) -> bool:
         return False
     if info.v_codec not in _GPU_DECODABLE:
         return False
-    if info.pix_fmt and info.pix_fmt not in _WEB_SAFE_PIX:
-        return False        # 10-bit and 4:4:4 aren't worth the risk here
+    if info.pix_fmt not in _WEB_SAFE_PIX:
+        return False        # 10-bit, 4:4:4 or UNKNOWN — a wrong guess here
+                            # fails the encode instead of merely slowing it
     return all(f.split("=")[0] in _GPU_SAFE_FILTERS for f in vf)
 
 # What "Auto" picks, best first. The GPU is tried first because it is far
@@ -289,6 +297,9 @@ def _audio_filters(spec: JobSpec, info: MediaInfo,
             args += ["-ac", "1"]
     if spec.normalize:
         chain.append(_LOUDNORM)
+        # loudnorm internally resamples to 192 kHz and leaves it there —
+        # AAC would then land at 96 kHz. Pin the rate back to the source's.
+        chain.append(f"aresample={info.a_rate or 48000}")
     if chain:
         args += ["-af", ",".join(chain)]
     return args
@@ -301,8 +312,13 @@ def _audio_filters(spec: JobSpec, info: MediaInfo,
 def build_plan(spec: JobSpec, info: MediaInfo, out_dir: Path,
                overwrite: bool = False,
                gpu_encoders: set[str] | None = None,
-               gpu_decode: bool = True) -> JobPlan:
-    """Build the ffmpeg invocation(s) for one source file."""
+               gpu_decode: bool = True,
+               taken: set[str] | None = None) -> JobPlan:
+    """Build the ffmpeg invocation(s) for one source file.
+
+    ``taken`` (lower-cased paths) marks outputs other jobs in the same batch
+    already claimed, so no two jobs resolve to the same file.
+    """
     notes: list[str] = []
     ext, kind = effective_container(spec, info)
 
@@ -310,9 +326,14 @@ def build_plan(spec: JobSpec, info: MediaInfo, out_dir: Path,
         raise BuildError("source has no video stream")
     if kind == "audio" and not info.has_audio:
         raise BuildError("source has no audio stream")
+    if kind == "audio" and ext not in _AUDIO_TARGETS:
+        # 'Same as source' with e.g. .aac/.ogg/.wma input — no writer for it
+        raise BuildError(
+            f"can't write .{ext} audio — pick MP3, M4A, Opus, FLAC or WAV")
 
     trim_start, trim_dur, duration = _trim(spec, info, notes)
-    out = resolve_output(info.path, out_dir, ext, spec.suffix, overwrite)
+    out = resolve_output(info.path, out_dir, ext, spec.suffix, overwrite,
+                         taken)
 
     # `duration` stays the length being read, which the filters need;
     # `out_duration` is what the result will be, which progress needs.
@@ -499,9 +520,12 @@ def _audio_only(spec: JobSpec, info: MediaInfo, ext: str,
     enc, takes_bitrate, copy_ok = _AUDIO_TARGETS[ext]
     args = ["-vn"]
     if spec.audio_mode == "remove":
-        notes.append("'Remove audio' makes no sense for an audio file — kept")
+        notes.append("'Remove audio' makes no sense for an audio file — "
+                     "kept unchanged")
     filters = _audio_filters(spec, info)
-    want_copy = spec.audio_mode == "keep" and not filters
+    # 'remove' on an audio file means "leave it alone", so it must take the
+    # copy path — re-encoding here would be a silent lossy generation
+    want_copy = spec.audio_mode in ("keep", "remove") and not filters
     if want_copy and info.a_codec in copy_ok:
         args += ["-c:a", "copy"]
     else:
@@ -632,6 +656,13 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
             notes.append("Video already Discord-ready — copied untouched")
             codec = "copy"
 
+    # WebM only takes VP8/VP9/AV1 — an explicitly picked H.264/H.265 would
+    # fail at mux time ("Could not write header"), so swap it out up front
+    if ext == "webm" and codec not in ("copy", "vp9", "av1", "av1_nvenc"):
+        notes.append(f"{VIDEO_CODEC_LABELS.get(codec, codec)} can't be muxed "
+                     "into WebM — using VP9 instead")
+        codec = "vp9"
+
     if codec == "copy":
         copy_ok = _COPY_OK.get(ext, set())
         incompatible = copy_ok is not None and info.v_codec not in copy_ok
@@ -646,7 +677,7 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
             body = ["-c:v", "copy"] + _video_audio(spec, info, ext, notes,
                                                    want_compat, speed)
             body += _subs(info, ext, notes)
-            body += _mux_extras(ext)
+            body += _mux_extras(ext, info.v_codec)
             body += _custom(spec, notes)
             return JobPlan(passes=[head + body + [str(out)]], output=out,
                            duration=duration, notes=notes)
@@ -675,7 +706,8 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
     if rate_mode == "crf":
         common += _crf_args(codec, spec.crf)
         common += _size_ceiling(spec, info, duration, codec, notes)
-        body = common + audio_args + _subs(info, ext, notes) + _mux_extras(ext)
+        body = (common + audio_args + _subs(info, ext, notes)
+                + _mux_extras(ext, codec))
         body += _custom(spec, notes)
         return JobPlan(passes=[head + body + [str(out)]], output=out,
                        duration=duration, notes=notes)
@@ -695,7 +727,7 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
             notes.append("Size targeting with this codec is single-pass "
                          "(approximate)")
         body = common + rate + audio_args + _subs(info, ext, notes)
-        body += _mux_extras(ext) + _custom(spec, notes)
+        body += _mux_extras(ext, codec) + _custom(spec, notes)
         return JobPlan(passes=[head + body + [str(out)]], output=out,
                        duration=duration, notes=notes)
 
@@ -704,7 +736,7 @@ def _video(spec: JobSpec, info: MediaInfo, ext: str, head: list[str],
     p1 = head + common + rate + ["-pass", "1", "-passlogfile", passlog,
                                  "-an", "-sn", "-f", "null", "-"]
     p2 = head + common + rate + ["-pass", "2", "-passlogfile", passlog]
-    p2 += audio_args + _subs(info, ext, notes) + _mux_extras(ext)
+    p2 += audio_args + _subs(info, ext, notes) + _mux_extras(ext, codec)
     p2 += _custom(spec, notes) + [str(out)]
     return JobPlan(passes=[p1, p2], output=out, duration=duration,
                    notes=notes, passlog=passlog)
@@ -745,7 +777,9 @@ def _crf_args(codec: str, crf: int) -> list[str]:
 
 
 # encoders whose -maxrate/-bufsize actually constrain the output
-_CAPPABLE = {"h264", "h264rgb", "hevc", "vp9", "h264_nvenc", "hevc_nvenc",
+# NOT vp9: with -crf N -b:v 0 libvpx rejects -maxrate outright ("Rate
+# control parameters set without a bitrate") — the cap would kill the job.
+_CAPPABLE = {"h264", "h264rgb", "hevc", "h264_nvenc", "hevc_nvenc",
              "av1_nvenc"}
 
 # Above this the ceiling can't bind on any real content, and a short clip
@@ -834,15 +868,24 @@ def _subs(info: MediaInfo, ext: str, notes: list[str]) -> list[str]:
     if not info.has_subs:
         return []
     if ext == "mkv":
+        if info.s_codec == "mov_text":
+            # Matroska can't hold mp4's mov_text — converting keeps the subs
+            # where a blind copy would fail the whole job at mux time
+            notes.append("MP4 subtitles converted to SRT for MKV")
+            return ["-c:s", "srt"]
         return ["-c:s", "copy"]
     notes.append(f"Subtitle track dropped (.{ext} target)")
     return ["-sn"]
 
 
-def _mux_extras(ext: str) -> list[str]:
+def _mux_extras(ext: str, vcodec: str = "") -> list[str]:
+    args = []
     if ext in ("mp4", "mov"):
-        return ["-movflags", "+faststart"]
-    return []
+        if vcodec in ("hevc", "hevc_nvenc"):
+            # default 'hev1' tag is refused by QuickTime/Safari/iOS
+            args += ["-tag:v", "hvc1"]
+        args += ["-movflags", "+faststart"]
+    return args
 
 
 def preview_text(plan: JobPlan) -> str:

@@ -125,6 +125,11 @@ class FilesPanel(QWidget):
         if self._exclude is None:
             return False
         try:
+            # OUTPUT == INPUT means "write in place" — excluding it would
+            # hide every source file (the input root is in all their parents)
+            if (self._folder is not None
+                    and self._exclude == self._folder.resolve()):
+                return False
             return self._exclude in path.resolve().parents
         except OSError:
             return False
@@ -183,11 +188,14 @@ class FilesPanel(QWidget):
             item.setTextAlignment(COL_DUR, Qt.AlignmentFlag.AlignRight)
             self.tree.addTopLevelItem(item)
             key = str(path)
-            cached = self._infos.get(key)
+            cached = self._fresh(path, self._infos.get(key))
             if cached is not None:
                 self._fill_info(item, cached)
-            elif self._ffprobe is not None:
-                self._pool.start(_ProbeTask(self._ffprobe, path, self._signals))
+            else:
+                self._infos.pop(key, None)     # replaced on disk — stale
+                if self._ffprobe is not None:
+                    self._pool.start(
+                        _ProbeTask(self._ffprobe, path, self._signals))
 
         self.tree.blockSignals(False)
         self._apply_filter(self.filter_edit.text())
@@ -247,8 +255,25 @@ class FilesPanel(QWidget):
                 if item.checkState(COL_NAME) == Qt.CheckState.Checked
                 and self._path_of(item)]
 
+    @staticmethod
+    def _fresh(path: Path, info: MediaInfo | None) -> MediaInfo | None:
+        """Drop a cached MediaInfo whose file changed on disk since probing.
+
+        Size is the only signal we stored; a re-recorded file with the exact
+        same byte count slips through here, but probe.py's (mtime, size) key
+        still catches it at plan time.
+        """
+        if info is None:
+            return None
+        try:
+            if path.stat().st_size != info.size_bytes:
+                return None
+        except OSError:
+            return None
+        return info
+
     def info_for(self, path: Path) -> MediaInfo | None:
-        return self._infos.get(str(path))
+        return self._fresh(path, self._infos.get(str(path)))
 
     def first_checked_info(self) -> MediaInfo | None:
         for path in self.checked_files():

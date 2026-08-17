@@ -22,6 +22,8 @@ class MediaInfo:
     a_codec: str = ""
     a_bitrate: int | None = None       # kbps, when the file reports it
     a_channels: int = 0                # 0 = unknown
+    a_rate: int = 0                    # sample rate in Hz, 0 = unknown
+    s_codec: str = ""                  # first subtitle stream's codec
     width: int = 0
     height: int = 0
     fps: float | None = None
@@ -103,8 +105,17 @@ def probe(ffprobe: Path, path: Path) -> MediaInfo:
                 info.a_channels = int(stream.get("channels") or 0)
             except (TypeError, ValueError):
                 info.a_channels = 0
+            try:
+                info.a_rate = int(stream.get("sample_rate") or 0)
+            except (TypeError, ValueError):
+                info.a_rate = 0
         elif kind == "subtitle":
             info.has_subs = True
+            if not info.s_codec:
+                info.s_codec = stream.get("codec_name") or ""
 
-    _cache[key] = info
+    # never cache a failed/timed-out probe — an empty MediaInfo would poison
+    # every later plan for this file until its mtime changes
+    if data:
+        _cache[key] = info
     return info

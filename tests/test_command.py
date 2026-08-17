@@ -15,8 +15,8 @@ OUT = Path(r"C:\out")
 
 def info(**kw) -> MediaInfo:
     base = dict(path=SRC, duration=120.0, has_video=True, has_audio=True,
-                v_codec="h264", a_codec="aac", width=1920, height=1080,
-                a_bitrate=160, a_channels=2)
+                v_codec="h264", pix_fmt="yuv420p", a_codec="aac",
+                width=1920, height=1080, a_bitrate=160, a_channels=2)
     base.update(kw)
     return MediaInfo(**base)
 
